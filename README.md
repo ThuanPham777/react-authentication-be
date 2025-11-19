@@ -1,63 +1,73 @@
-# User Registration System - Backend
+# React Authentication Backend
 
-NestJS + MongoDB + JWT backend for user registration and authentication.
+NestJS service that issues JWT access/refresh tokens, verifies Google Sign‑In credentials, and serves a mock email inbox for the frontend.
 
-## Prerequisites
+## Features
+- Email/password registration & login with hashed passwords (bcrypt).
+- Google One Tap / Sign-In credential exchange (`/user/google`).
+- Refresh-token rotation with hashed persistence in MongoDB.
+- Passport JWT guard that protects mock mailbox/email endpoints.
+- Mock data layer (`src/mail`) that mimics folders, lists, and message details.
 
-- Node.js 20.0+ (or 22.x)
-- npm (or yarn/pnpm)
-- MongoDB (local or Atlas)
+## Tech Stack
+- NestJS 11, TypeScript, Mongoose 8
+- Passport JWT, Google Auth Library
+- MongoDB for persistent users & refresh tokens
 
-## Install
+## Getting Started
 
 ```bash
-cd user-registration-be
+cd react-authentication-be
 npm install
 ```
 
-## Environment (.env)
-
-Create `.env` in `user-registration-be`:
+Create `.env` alongside `package.json`:
 
 ```env
-MONGODB_URI=mongodb://localhost:27017/user-registration
+MONGODB_URI=mongodb://localhost:27017/react-authentication
 PORT=4000
+CORS_ORIGIN=http://localhost:5173
 JWT_ACCESS_SECRET=replace-with-strong-secret
 JWT_ACCESS_EXPIRES=15m
+JWT_REFRESH_SECRET=replace-with-refresh-secret # falls back to access secret if omitted
 JWT_REFRESH_EXPIRES=7d
-CORS_ORIGIN=http://localhost:5173
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 ```
 
-Notes:
-- `PORT` defaults to 4000 if unset.
-- `MONGODB_URI` is required.
+> **Heads-up:** `GOOGLE_CLIENT_ID` must match the client ID the frontend passes to Google Identity Services. Register the same value under *Authorized JavaScript origins* that host the frontend.
 
-## Run
+### Useful Commands
+| Action | Command |
+| --- | --- |
+| Start dev server with watch | `npm run start:dev` |
+| Lint | `npm run lint` |
+| Run tests | `npm run test` / `npm run test:e2e` |
+| Production build | `npm run build` then `npm run start:prod` |
 
-Development (watch):
-```bash
-npm run start:dev
-```
+## API Overview
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/user/register` | Email/password signup |
+| `POST` | `/user/login` | Issue access + refresh token |
+| `POST` | `/user/google` | Exchange Google credential for tokens |
+| `POST` | `/user/refresh` | Rotate refresh token, issue new access token |
+| `POST` | `/user/logout` | Revoke stored refresh token |
+| `GET` | `/mailboxes` | List folders + unread counts (JWT required) |
+| `GET` | `/mailboxes/:id/emails` | Paginated list for a folder (JWT required) |
+| `GET` | `/emails/:id` | Email detail, metadata, attachments (JWT required) |
 
-Production (build then run):
-```bash
-npm run build && npm run start:prod
-```
+All protected routes expect `Authorization: Bearer <accessToken>`.
 
-API base URL (local): `http://localhost:4000`
+## Google Sign-In Checklist
+1. Create an OAuth **Web application** client in Google Cloud Console.
+2. Add your frontend origins (e.g., `http://localhost:5173`, production domain) to the client.
+3. Copy the **Client ID** into both `GOOGLE_CLIENT_ID` (backend) and `VITE_GOOGLE_CLIENT_ID` (frontend).
+4. Restart both servers so the new environment variables take effect.
 
-Public URL: `https://user-registration-be-uibn.onrender.com`
+## Mock Email Data
+`src/mail/mock-data.ts` contains realistic folders, list rows, body HTML, and attachments. Because the data is static, you can demo the email dashboard without integrating with a real provider.
 
-## API Routes (summary)
-
-- POST `/user/register` — create account
-- POST `/user/login` — returns `accessToken`, `refreshToken`, `user`
-- POST `/user/refresh` — exchange `userId` + `refreshToken` for new tokens
-- POST `/user/logout` — revoke refresh token
-
-## Docker (optional)
-
-Run MongoDB locally with Docker:
-```bash
-docker run -d --name mongodb -p 27017:27017 mongo
-```
+## Deployment Notes
+- Provide a managed MongoDB connection string through `MONGODB_URI`.
+- Ensure the deployed frontend origin is present in Google’s OAuth config and in `CORS_ORIGIN`.
+- Never commit secrets—use environment variables provided by your host (Render, Vercel, etc.).***

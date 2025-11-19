@@ -12,11 +12,31 @@ export class User {
   @Prop({ required: true, unique: true, lowercase: true, trim: true })
   email: string;
 
-  @Prop({ required: true })
-  password: string;
+  @Prop({
+    required: function () {
+      return this.provider === 'password';
+    },
+  })
+  password?: string;
+
+  @Prop({ required: false, trim: true })
+  name?: string;
 
   @Prop({ required: false })
-  refreshToken: string;
+  avatarUrl?: string;
+
+  @Prop({
+    required: true,
+    enum: ['password', 'google'],
+    default: 'password',
+  })
+  provider: 'password' | 'google';
+
+  @Prop({ required: false, unique: true, sparse: true })
+  googleId?: string;
+
+  @Prop({ required: false })
+  refreshToken?: string;
 
   @Prop({ default: Date.now })
   createdAt: Date;
@@ -34,7 +54,7 @@ UserSchema.set('toJSON', {
 
 // Hash on create or when password changed
 UserSchema.pre<UserDocument>('save', async function (next) {
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password') || !this.password) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();

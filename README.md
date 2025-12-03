@@ -64,14 +64,19 @@ SMTP_PASS=app-password-or-secret
 ## API Overview
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/user/register` | Email/password signup |
-| `POST` | `/user/login` | Issue access + refresh token |
-| `POST` | `/user/google` | Exchange Google credential for tokens |
-| `POST` | `/user/refresh` | Rotate refresh token, issue new access token |
-| `POST` | `/user/logout` | Revoke stored refresh token |
-| `GET` | `/mailboxes` | List folders + unread counts (JWT required) |
-| `GET` | `/mailboxes/:id/emails` | Paginated list for a folder (JWT required) |
-| `GET` | `/emails/:id` | Email detail, metadata, attachments (JWT required) |
+| `POST` | `/api/auth/register` | Email/password signup |
+| `POST` | `/api/auth/login` | Issue access + refresh token |
+| `POST` | `/api/auth/google` | Exchange Google credential for tokens |
+| `POST` | `/api/auth/refresh` | Rotate refresh token, issue new access token |
+| `POST` | `/api/auth/logout` | Revoke stored refresh token |
+| `GET` | `/api/mailboxes` | List folders + unread counts (JWT required) |
+| `GET` | `/api/mailboxes/:id/emails` | Paginated list for a folder (JWT required) |
+| `GET` | `/api/emails/:id` | Email detail, metadata, attachments (JWT required) |
+| `GET` | `/api/emails/send` | Send email
+| `POST` | `/api/emails/:id/reply` | reply an email
+| `POST` | `/api/emails/:id/modify` | modify email (markRead, markUnread, star, unstar, delete)
+| `GET` | `/api/attachments/:id` | get attachments
+
 
 All protected routes expect `Authorization: Bearer <accessToken>`.
 

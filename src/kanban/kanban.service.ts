@@ -14,6 +14,7 @@ import {
   EmailStatus,
 } from './schemas/email-item.chema';
 import { AiService } from 'src/ai/ai.service';
+import { QdrantService } from 'src/ai/qdrant.service';
 import Fuse from 'fuse.js';
 
 // NOTE: demo LLM giản lược.
@@ -34,6 +35,7 @@ export class KanbanService {
     private readonly usersService: UsersService,
     private readonly config: ConfigService,
     private readonly ai: AiService,
+    private readonly qdrant: QdrantService,
   ) {}
 
   private async getGmailClient(userId: string) {
@@ -51,6 +53,7 @@ export class KanbanService {
 
   /**
    * Fuzzy search email items for a user across subject, sender name/email, snippet, summary.
+   * Supports typo tolerance and partial matches.
    */
   async searchItems(userId: string, q: string, limit = 50) {
     const uid = new Types.ObjectId(userId);
@@ -69,8 +72,10 @@ export class KanbanService {
         { name: 'summary', weight: 0.2 },
       ],
       includeScore: true,
-      threshold: 0.45,
+      threshold: 0.45, // Typo tolerance
       ignoreLocation: true,
+      minMatchCharLength: 2, // Partial matches
+      shouldSort: true, // Best matches first
     });
 
     const results = fuse.search(q, { limit });
@@ -79,6 +84,150 @@ export class KanbanService {
     return results
       .map((r) => ({ ...(r.item as any), _score: r.score ?? 0 }))
       .sort((a, b) => (a._score ?? 0) - (b._score ?? 0));
+  }
+
+  /**
+   * Semantic search using vector embeddings in Qdrant
+   * Finds emails by conceptual relevance, not just keyword matching
+   */
+  async semanticSearch(userId: string, query: string, limit = 20) {
+    if (!query || !query.trim()) {
+      return [];
+    }
+
+    try {
+      // Generate embedding for search query
+      const queryEmbedding = await this.ai.generateEmbedding(query.trim());
+
+      // Search in Qdrant
+      const results = await this.qdrant.searchSimilar(
+        userId,
+        queryEmbedding,
+        limit,
+        0.5, // Score threshold for relevance
+      );
+
+      // Enrich with MongoDB data
+      const enriched = [];
+      for (const result of results) {
+        const item = await this.emailItemModel
+          .findOne({
+            userId: new Types.ObjectId(userId),
+            messageId: result.messageId,
+          })
+          .lean();
+
+        if (item) {
+          enriched.push({
+            ...item,
+            _score: result.score,
+            _searchType: 'semantic',
+          });
+        }
+      }
+
+      return enriched;
+    } catch (error) {
+      console.error('Semantic search error:', error);
+      // Fallback to fuzzy search if semantic search fails
+      return this.searchItems(userId, query, limit);
+    }
+  }
+
+  /**
+   * Get auto-suggestions for search based on contacts and keywords
+   */
+  async getSearchSuggestions(userId: string, query: string, limit = 5) {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    const uid = new Types.ObjectId(userId);
+    const q = query.trim().toLowerCase();
+
+    // Get unique contacts from Qdrant
+    const contacts = await this.qdrant.getUniqueContacts(userId, 100);
+
+    // Filter contacts by query
+    const contactSuggestions = contacts
+      .filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q),
+      )
+      .slice(0, 3)
+      .map((c) => ({
+        type: 'contact' as const,
+        text: c.name,
+        value: c.email,
+      }));
+
+    // Get subject keywords from recent emails
+    const recentEmails = await this.emailItemModel
+      .find({ userId: uid })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select('subject')
+      .lean();
+
+    // Extract keywords from subjects
+    const keywords = new Set<string>();
+    recentEmails.forEach((email) => {
+      if (email.subject) {
+        const words = email.subject
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((w) => w.length > 3 && w.includes(q));
+        words.forEach((w) => keywords.add(w));
+      }
+    });
+
+    const keywordSuggestions = Array.from(keywords)
+      .slice(0, 2)
+      .map((k) => ({
+        type: 'keyword' as const,
+        text: k,
+        value: k,
+      }));
+
+    return [...contactSuggestions, ...keywordSuggestions].slice(0, limit);
+  }
+
+  /**
+   * Generate and store embedding for an email item
+   */
+  async generateAndStoreEmbedding(userId: string, messageId: string) {
+    const uid = new Types.ObjectId(userId);
+    const item = await this.emailItemModel.findOne({ userId: uid, messageId });
+
+    if (!item) {
+      throw new NotFoundException('Email item not found');
+    }
+
+    // Generate embedding
+    const embedding = await this.ai.generateEmailEmbedding({
+      subject: item.subject,
+      fromEmail: item.senderEmail,
+      fromName: item.senderName,
+      snippet: item.snippet,
+      summary: item.summary,
+    });
+
+    // Store in Qdrant
+    await this.qdrant.upsertEmbedding(messageId, userId, embedding, {
+      subject: item.subject,
+      senderName: item.senderName,
+      senderEmail: item.senderEmail,
+      snippet: item.snippet,
+      summary: item.summary,
+      createdAt: (item as any).createdAt,
+    });
+
+    // Update MongoDB
+    item.hasEmbedding = true;
+    item.embeddingGeneratedAt = new Date();
+    await item.save();
+
+    return { success: true };
   }
 
   private base64UrlDecode(input: string) {
@@ -162,7 +311,7 @@ export class KanbanService {
       const subject = this.getHeader(headers, 'Subject') || '(No subject)';
       const from = this.parseAddress(fromRaw);
 
-      await this.emailItemModel.updateOne(
+      const result = await this.emailItemModel.updateOne(
         { userId: uid, messageId: m.id },
         {
           $setOnInsert: {
@@ -182,6 +331,13 @@ export class KanbanService {
         },
         { upsert: true },
       );
+
+      // Generate embedding for new emails (in background, don't await)
+      if (result.upsertedCount > 0) {
+        this.generateAndStoreEmbedding(userId, m.id).catch((err) =>
+          console.error('Failed to generate embedding for', m.id, err),
+        );
+      }
     }
 
     return { synced: msgs.length };
@@ -190,9 +346,9 @@ export class KanbanService {
   async getBoard(userId: string, labelId?: string) {
     // Optional sync khi mở board lần đầu
     if (labelId) {
-      await this.syncLabelToItems(userId, labelId, 5);
+      await this.syncLabelToItems(userId, labelId, 10);
     } else {
-      await this.syncLabelToItems(userId, 'INBOX', 5);
+      await this.syncLabelToItems(userId, 'INBOX', 10);
     }
 
     const uid = new Types.ObjectId(userId);
@@ -289,6 +445,11 @@ export class KanbanService {
     // (item as any).bodyHash = s.bodyHash;
 
     await item.save();
+
+    // Generate embedding after summary (in background)
+    this.generateAndStoreEmbedding(userId, messageId).catch((err) =>
+      console.error('Failed to generate embedding after summary', err),
+    );
 
     return { summary: s.summary, cached: false };
   }

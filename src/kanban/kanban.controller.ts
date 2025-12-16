@@ -46,6 +46,45 @@ export class KanbanController {
     return { status: 'success', data };
   }
 
+  @Post('search/semantic')
+  async semanticSearch(
+    @Req() req: Request,
+    @Body() body: { query: string; limit?: number },
+  ) {
+    const userId = this.getUserId(req);
+    const data = await this.kanban.semanticSearch(
+      userId,
+      body.query,
+      body.limit ?? 20,
+    );
+    return { status: 'success', data };
+  }
+
+  @Get('search/suggestions')
+  async searchSuggestions(
+    @Req() req: Request,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userId = this.getUserId(req);
+    const l = limit ? parseInt(limit, 10) : 5;
+    const data = await this.kanban.getSearchSuggestions(userId, q ?? '', l);
+    return { status: 'success', data };
+  }
+
+  @Post('items/:messageId/generate-embedding')
+  async generateEmbedding(
+    @Req() req: Request,
+    @Param('messageId') messageId: string,
+  ) {
+    const userId = this.getUserId(req);
+    const result = await this.kanban.generateAndStoreEmbedding(
+      userId,
+      messageId,
+    );
+    return { status: 'success', data: result };
+  }
+
   @Patch('items/:messageId/status')
   async updateStatus(
     @Req() req: Request,

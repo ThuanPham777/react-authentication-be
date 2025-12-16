@@ -6,14 +6,17 @@ import { UsersModule } from '../users/users.module';
 import { EmailItem, EmailItemSchema } from './schemas/email-item.chema';
 import { KanbanCron } from './kanban.cron';
 import { AiModule } from 'src/ai/ai.module';
+import { QdrantService } from 'src/ai/qdrant.service';
 
 @Module({
-    imports: [
-        MongooseModule.forFeature([{ name: EmailItem.name, schema: EmailItemSchema }]),
-        UsersModule,
-        AiModule,
-    ],
-    controllers: [KanbanController],
-    providers: [KanbanService, KanbanCron],
+  imports: [
+    MongooseModule.forFeature([
+      { name: EmailItem.name, schema: EmailItemSchema },
+    ]),
+    UsersModule,
+    AiModule,
+  ],
+  controllers: [KanbanController],
+  providers: [KanbanService, KanbanCron, QdrantService],
 })
-export class KanbanModule { }
+export class KanbanModule {}

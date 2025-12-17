@@ -343,7 +343,12 @@ export class KanbanService {
     return { synced: msgs.length };
   }
 
-  async getBoard(userId: string, labelId?: string) {
+  async getBoard(
+    userId: string,
+    labelId?: string,
+    pageToken?: string,
+    pageSize: number = 20,
+  ) {
     // Optional sync khi mở board lần đầu
     if (labelId) {
       await this.syncLabelToItems(userId, labelId, 10);
@@ -353,20 +358,88 @@ export class KanbanService {
 
     const uid = new Types.ObjectId(userId);
 
-    const items = await this.emailItemModel
-      .find({ userId: uid })
-      .sort({ updatedAt: -1 })
-      .lean();
+    // Decode pageToken to get skip offset for each column
+    let skipMap: Record<EmailStatus, number> = {
+      [EmailStatus.INBOX]: 0,
+      [EmailStatus.TODO]: 0,
+      [EmailStatus.IN_PROGRESS]: 0,
+      [EmailStatus.DONE]: 0,
+      [EmailStatus.SNOOZED]: 0,
+    };
 
-    const group = (status: EmailStatus) =>
-      items.filter((i) => i.status === status);
+    if (pageToken) {
+      try {
+        skipMap = JSON.parse(
+          Buffer.from(pageToken, 'base64').toString('utf-8'),
+        );
+      } catch {
+        // Invalid token, start from beginning
+      }
+    }
+
+    // Get total counts for each status
+    const totals = await Promise.all(
+      Object.values(EmailStatus).map(async (status) => ({
+        status,
+        count: await this.emailItemModel.countDocuments({
+          userId: uid,
+          status,
+        }),
+      })),
+    );
+
+    const totalMap = totals.reduce(
+      (acc, { status, count }) => ({ ...acc, [status]: count }),
+      {} as Record<EmailStatus, number>,
+    );
+
+    // Fetch paginated items for each column
+    const columnData = await Promise.all(
+      Object.values(EmailStatus).map(async (status) => {
+        const items = await this.emailItemModel
+          .find({ userId: uid, status })
+          .sort({ updatedAt: -1 })
+          .skip(skipMap[status] || 0)
+          .limit(pageSize)
+          .lean();
+
+        return { status, items };
+      }),
+    );
+
+    const data = columnData.reduce(
+      (acc, { status, items }) => ({ ...acc, [status]: items }),
+      {} as Record<EmailStatus, any[]>,
+    );
+
+    // Check if there are more items for any column
+    const hasMore = Object.values(EmailStatus).some(
+      (status) => (skipMap[status] || 0) + pageSize < totalMap[status],
+    );
+
+    // Generate next page token
+    let nextPageToken: string | null = null;
+    if (hasMore) {
+      const nextSkipMap = Object.values(EmailStatus).reduce(
+        (acc, status) => ({
+          ...acc,
+          [status]: (skipMap[status] || 0) + pageSize,
+        }),
+        {} as Record<EmailStatus, number>,
+      );
+      nextPageToken = Buffer.from(JSON.stringify(nextSkipMap)).toString(
+        'base64',
+      );
+    }
 
     return {
-      INBOX: group(EmailStatus.INBOX),
-      TODO: group(EmailStatus.TODO),
-      IN_PROGRESS: group(EmailStatus.IN_PROGRESS),
-      DONE: group(EmailStatus.DONE),
-      SNOOZED: group(EmailStatus.SNOOZED),
+      data,
+      meta: {
+        pageSize,
+        nextPageToken,
+        hasMore,
+        total: totalMap,
+      },
     };
   }
 

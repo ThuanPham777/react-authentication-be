@@ -28,10 +28,21 @@ export class KanbanController {
   }
 
   @Get('board')
-  async getBoard(@Req() req: Request, @Query('label') label?: string) {
+  async getBoard(
+    @Req() req: Request,
+    @Query('label') label?: string,
+    @Query('pageToken') pageToken?: string,
+    @Query('limit') limit?: string,
+  ) {
     const userId = this.getUserId(req);
-    const data = await this.kanban.getBoard(userId, label);
-    return { status: 'success', data };
+    const pageSize = limit ? parseInt(limit, 10) : 20;
+    const result = await this.kanban.getBoard(
+      userId,
+      label,
+      pageToken,
+      pageSize,
+    );
+    return { status: 'success', ...result };
   }
 
   @Get('search')

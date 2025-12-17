@@ -17,16 +17,6 @@ import { AiService } from 'src/ai/ai.service';
 import { QdrantService } from 'src/ai/qdrant.service';
 import Fuse from 'fuse.js';
 
-// NOTE: demo LLM giản lược.
-// Bạn có thể thay bằng OpenAI/Groq service của bạn.
-async function fakeSummarize(htmlOrText: string) {
-  const text = htmlOrText
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return text.slice(0, 240) + (text.length > 240 ? '...' : '');
-}
-
 @Injectable()
 export class KanbanService {
   constructor(
@@ -37,13 +27,6 @@ export class KanbanService {
     private readonly ai: AiService,
     private readonly qdrant: QdrantService,
   ) {}
-
-  private embeddingsEnabled(): boolean {
-    const cfg = this.config.get<string>('DISABLE_EMBEDDINGS');
-    const env = process.env.DISABLE_EMBEDDINGS;
-    const v = cfg ?? env;
-    return !(v === 'true' || v === '1');
-  }
 
   private async getGmailClient(userId: string) {
     const { refreshToken } =
@@ -223,15 +206,6 @@ export class KanbanService {
 
     if (!item) {
       throw new NotFoundException('Email item not found');
-    }
-
-    // Skip if embeddings are disabled by config/env
-    if (!this.embeddingsEnabled()) {
-      console.log(
-        '[Embeddings] Disabled via DISABLE_EMBEDDINGS, skipping generation for',
-        messageId,
-      );
-      return { skipped: true };
     }
 
     // Generate embedding
@@ -552,15 +526,9 @@ export class KanbanService {
     await item.save();
 
     // Generate embedding after summary (in background)
-    if (this.embeddingsEnabled()) {
-      this.generateAndStoreEmbedding(userId, messageId).catch((err) =>
-        console.error('Failed to generate embedding after summary', err),
-      );
-    } else {
-      console.log(
-        '[Embeddings] Skipped after summary due to DISABLE_EMBEDDINGS',
-      );
-    }
+    this.generateAndStoreEmbedding(userId, messageId).catch((err) =>
+      console.error('Failed to generate embedding after summary', err),
+    );
 
     return { summary: s.summary, cached: false };
   }

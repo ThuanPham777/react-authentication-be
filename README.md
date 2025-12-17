@@ -1,29 +1,59 @@
-# React Authentication Backend
+# React Email Client And AI-powered Kanban Backend
 
-NestJS service that issues JWT access/refresh tokens, verifies Google Sign‑In credentials, and serves a mock email inbox for the frontend.
+NestJS backend service that powers an intelligent email management system with JWT authentication, Gmail API integration, and AI-powered Kanban board for organizing emails.
 
 ## Features
 
-- Email/password registration & login with hashed passwords (bcrypt).
-- Google One Tap / Sign-In credential exchange (`/user/google`).
-- Refresh-token rotation with hashed persistence in MongoDB.
-- Passport JWT guard that protects mock mailbox/email endpoints.
-- Mock data layer (`src/mail`) that mimics folders, lists, and message details.
+### Authentication & Security
+
+- Email/password registration & login with bcrypt hashed passwords
+- Google One Tap / Sign-In OAuth 2.0 integration
+- JWT access/refresh token rotation with secure storage in MongoDB
+- Passport JWT guard protecting all email and Kanban endpoints
+
+### Email Management
+
+- Gmail API integration for real-time email sync
+- Full email CRUD operations (read, send, reply, modify)
+- Attachment support with metadata extraction
+- Advanced email operations (mark read/unread, star, delete)
+
+### AI-Powered Kanban Board
+
+- Dynamic, user-customizable column configuration (stored in MongoDB)
+- Drag-and-drop email organization with automatic Gmail label sync
+- AI-powered email summarization using OpenAI API
+- Smart snooze functionality with automatic wake-up
+- Real-time board updates with pagination support
+- Attachment detection and filtering
+
+### Search & Discovery
+
+- Fuzzy search with typo tolerance (Fuse.js)
+- Semantic search using vector embeddings (Qdrant)
+- Search suggestions with contact extraction
 
 ## Tech Stack
 
-- NestJS 11, TypeScript, Mongoose 8
-- Passport JWT, Google Auth Library
-- MongoDB for persistent users & refresh tokens
+- **Framework**: NestJS 11, TypeScript 5
+- **Database**: MongoDB (Mongoose 8), Qdrant Vector DB
+- **Authentication**: Passport JWT, Google Auth Library
+- **AI/ML**: OpenAI API, Vector embeddings
+- **Email**: Gmail API with OAuth 2.0
+- **Utilities**: Bcrypt, Fuse.js, Cron scheduler
 
 ## Getting Started
+
+### 1. Install Dependencies
 
 ```bash
 cd react-authentication-be
 npm install
 ```
 
-Create `.env` alongside `package.json`:
+### 2. Configure Environment
+
+Create `.env` file alongside `package.json`:
 
 ```env
 MONGODB_URI=mongodb://localhost:27017/react-authentication
@@ -42,11 +72,13 @@ OPENAI_API_KEY=sk-proj-....
 OPENAI_MODEL_SUMMARY=gpt-oss-120b
 ```
 
-How to run program
+### 3. Run Development Server
 
 ```bash
 npm run start:dev
 ```
+
+The backend will start on `http://localhost:4000`
 
 > **Heads-up:** `GOOGLE_CLIENT_ID` must match the client ID configured in Google Identity Services (used for app login).
 > The IMAP/SMTP credentials should point to a test mailbox that the backend can log into (e.g., a Gmail account with IMAP enabled and an App Password).
@@ -62,24 +94,41 @@ npm run start:dev
 
 ## API Overview
 
-| Method | Endpoint                    | Description                                               |
-| ------ | --------------------------- | --------------------------------------------------------- |
-| `POST` | `/api/auth/register`        | Email/password signup                                     |
-| `POST` | `/api/auth/login`           | Issue access + refresh token                              |
-| `POST` | `/api/auth/google`          | Exchange Google credential for tokens                     |
-| `POST` | `/api/auth/refresh`         | Rotate refresh token, issue new access token              |
-| `POST` | `/api/auth/logout`          | Revoke stored refresh token                               |
-| `GET`  | `/api/mailboxes`            | List folders + unread counts (JWT required)               |
-| `GET`  | `/api/mailboxes/:id/emails` | Paginated list for a folder (JWT required)                |
-| `GET`  | `/api/emails/:id`           | Email detail, metadata, attachments (JWT required)        |
-| `GET`  | `/api/emails/send`          | Send email                                                |
-| `POST` | `/api/emails/:id/reply`     | reply an email                                            |
-| `POST` | `/api/emails/:id/modify`    | modify email (markRead, markUnread, star, unstar, delete) |
+### Authentication Endpoints
 
-| `GET` | `/api/kanban/board` | get kanban board data (jwt requirments) |
-| `PATCH` | `/api/kanban/items/:messageId/status` |update email status (jwt requirments) |
-| `POST` | `/api/kanban/items/:messageId/snooze` | snooze email (jwt requirments) |
-| `GET` | `/api/kanban/items/:messageId/summarize` | generate AI summary (jwt requirments) |
+| Method | Endpoint             | Description                            |
+| ------ | -------------------- | -------------------------------------- |
+| `POST` | `/api/auth/register` | Email/password signup                  |
+| `POST` | `/api/auth/login`    | Issue access + refresh token           |
+| `POST` | `/api/auth/google`   | Exchange Google credential for tokens  |
+| `POST` | `/api/auth/refresh`  | Rotate refresh token, issue new access |
+| `POST` | `/api/auth/logout`   | Revoke stored refresh token            |
+
+### Mailbox & Email Endpoints
+
+| Method | Endpoint                    | Description                                |
+| ------ | --------------------------- | ------------------------------------------ |
+| `GET`  | `/api/mailboxes`            | List folders + unread counts (JWT)         |
+| `GET`  | `/api/mailboxes/:id/emails` | Paginated list for a folder (JWT)          |
+| `GET`  | `/api/emails/:id`           | Email detail, metadata, attachments (JWT)  |
+| `POST` | `/api/emails/send`          | Send email (JWT)                           |
+| `POST` | `/api/emails/:id/reply`     | Reply to an email (JWT)                    |
+| `POST` | `/api/emails/:id/modify`    | Modify email (mark read/unread, star, etc) |
+
+### Kanban Board Endpoints
+
+| Method  | Endpoint                                          | Description                        |
+| ------- | ------------------------------------------------- | ---------------------------------- |
+| `GET`   | `/api/kanban/board`                               | Get kanban board data (JWT)        |
+| `GET`   | `/api/kanban/search`                              | Fuzzy search emails (JWT)          |
+| `POST`  | `/api/kanban/search/semantic`                     | Semantic vector search (JWT)       |
+| `GET`   | `/api/kanban/search/suggestions`                  | Get search suggestions (JWT)       |
+| `POST`  | `/api/kanban/items/:messageId/generate-embedding` | Generate embedding for email (JWT) |
+| `PATCH` | `/api/kanban/items/:messageId/status`             | Update email status (JWT)          |
+| `POST`  | `/api/kanban/items/:messageId/snooze`             | Snooze email until date (JWT)      |
+| `POST`  | `/api/kanban/items/:messageId/summarize`          | Generate AI summary (JWT)          |
+| `GET`   | `/api/kanban/columns`                             | Get user's column config (JWT)     |
+| `POST`  | `/api/kanban/columns`                             | Update column configuration (JWT)  |
 
 All protected routes expect `Authorization: Bearer <accessToken>`.
 

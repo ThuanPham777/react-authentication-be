@@ -58,8 +58,13 @@ export class KanbanService {
   async searchItems(userId: string, q: string, limit = 50) {
     const uid = new Types.ObjectId(userId);
 
-    // fetch candidate items (could be optimized with text indexes)
-    const items = await this.emailItemModel.find({ userId: uid }).lean();
+    // fetch candidate items with LIMIT to prevent memory issues
+    // Only load recent 500 items instead of ALL emails
+    const items = await this.emailItemModel
+      .find({ userId: uid })
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
 
     if (!q || !q.trim()) return [];
 
@@ -161,13 +166,14 @@ export class KanbanService {
         value: c.email,
       }));
 
-    // Get subject keywords from recent emails
+    // Get subject keywords from recent emails (limit fields to reduce memory)
     const recentEmails = await this.emailItemModel
       .find({ userId: uid })
       .sort({ createdAt: -1 })
       .limit(50)
       .select('subject')
-      .lean();
+      .lean()
+      .exec();
 
     // Extract keywords from subjects
     const keywords = new Set<string>();

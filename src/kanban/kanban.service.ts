@@ -112,16 +112,25 @@ export class KanbanService {
         0.5, // Score threshold for relevance
       );
 
-      // Enrich with MongoDB data
+      // Enrich with MongoDB data (batch query for better performance)
+      const messageIds = results.map((r) => r.messageId);
+      const items = await this.emailItemModel
+        .find({
+          userId: new Types.ObjectId(userId),
+          messageId: { $in: messageIds },
+        })
+        .select(
+          'messageId subject senderName senderEmail snippet summary status',
+        )
+        .lean()
+        .exec();
+
+      // Create lookup map
+      const itemMap = new Map(items.map((item) => [item.messageId, item]));
+
       const enriched = [];
       for (const result of results) {
-        const item = await this.emailItemModel
-          .findOne({
-            userId: new Types.ObjectId(userId),
-            messageId: result.messageId,
-          })
-          .lean();
-
+        const item = itemMap.get(result.messageId);
         if (item) {
           enriched.push({
             ...item,
@@ -339,7 +348,8 @@ export class KanbanService {
       );
 
       // Generate embedding for new emails (in background, don't await)
-      if (result.upsertedCount > 0) {
+      // Skip embedding generation during initial sync to reduce memory
+      if (result.upsertedCount > 0 && process.env.NODE_ENV !== 'production') {
         this.generateAndStoreEmbedding(userId, m.id).catch((err) =>
           console.error('Failed to generate embedding for', m.id, err),
         );
@@ -539,20 +549,33 @@ export class KanbanService {
   async wakeExpiredSnoozed() {
     const now = new Date();
 
-    const items = await this.emailItemModel.find({
-      status: EmailStatus.SNOOZED,
-      snoozeUntil: { $lte: now },
-    });
+    // Limit to 100 items per run to prevent memory issues
+    const items = await this.emailItemModel
+      .find({
+        status: EmailStatus.SNOOZED,
+        snoozeUntil: { $lte: now },
+      })
+      .limit(100)
+      .select('_id originalStatus')
+      .lean()
+      .exec();
 
-    for (const it of items) {
-      await this.emailItemModel.updateOne(
-        { _id: it._id },
-        {
-          $set: { status: it.originalStatus ?? EmailStatus.INBOX },
+    if (items.length === 0) {
+      return { woke: 0 };
+    }
+
+    // Bulk update for better performance
+    const bulkOps = items.map((it) => ({
+      updateOne: {
+        filter: { _id: it._id },
+        update: {
+          $set: { status: (it as any).originalStatus ?? EmailStatus.INBOX },
           $unset: { snoozeUntil: 1, originalStatus: 1 },
         },
-      );
-    }
+      },
+    }));
+
+    await this.emailItemModel.bulkWrite(bulkOps);
 
     return { woke: items.length };
   }

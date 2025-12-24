@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 
 @Injectable()
 export class QdrantService implements OnModuleInit {
@@ -79,15 +80,20 @@ export class QdrantService implements OnModuleInit {
     try {
       await this.clientReady;
       if (!this.client) return false;
+
+      // Convert messageId to UUID format if needed
+      // Qdrant requires either unsigned integer or UUID format
+      const pointId = this.convertToValidPointId(messageId);
+
       await this.client.upsert(this.collectionName, {
         wait: true,
         points: [
           {
-            id: messageId,
+            id: pointId,
             vector: embedding,
             payload: {
               userId,
-              messageId,
+              messageId, // Keep original messageId in payload for reference
               ...metadata,
               createdAt:
                 metadata.createdAt?.toISOString() || new Date().toISOString(),
@@ -100,6 +106,40 @@ export class QdrantService implements OnModuleInit {
       this.logger.error('Failed to upsert embedding', error);
       return false;
     }
+  }
+
+  /**
+   * Convert a messageId to a valid Qdrant point ID (UUID format)
+   * Qdrant requires either an unsigned integer or a UUID.
+   * This creates a deterministic UUID-shaped ID derived from the messageId.
+   */
+  private convertToValidPointId(messageId: string): string {
+    // Check if it's already a valid UUID format
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(messageId)) {
+      return messageId;
+    }
+
+    // For non-UUID strings (like Gmail message IDs or hex strings),
+    // hash deterministically and format as a UUID (8-4-4-4-12).
+    // Note: this is *not* a standard UUID v5 implementation, but it is valid UUID format.
+
+    const hex = createHash('sha256')
+      .update(messageId)
+      .digest('hex')
+      .slice(0, 32);
+    const chars = hex.split('');
+
+    // Set version nibble to 4 (UUID v4-style)
+    chars[12] = '4';
+
+    // Set variant to RFC 4122 (8..b)
+    const variantNibble = parseInt(chars[16], 16);
+    chars[16] = ((variantNibble & 0x3) | 0x8).toString(16);
+
+    const v = chars.join('');
+    return `${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-${v.slice(16, 20)}-${v.slice(20, 32)}`;
   }
 
   async searchSimilar(
@@ -148,9 +188,11 @@ export class QdrantService implements OnModuleInit {
       await this.clientReady;
       if (!this.client) return false;
 
+      const pointId = this.convertToValidPointId(messageId);
+
       await this.client.delete(this.collectionName, {
         wait: true,
-        points: [messageId],
+        points: [pointId],
       });
       return true;
     } catch (error) {

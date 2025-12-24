@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -104,7 +105,7 @@ export class KanbanService {
         userId,
         queryEmbedding,
         limit,
-        0.5, // Score threshold for relevance
+        0.2, // Score threshold for relevance (0.5 is often too strict)
       );
 
       // Enrich with MongoDB data (batch query for better performance)
@@ -224,14 +225,26 @@ export class KanbanService {
     });
 
     // Store in Qdrant
-    await this.qdrant.upsertEmbedding(messageId, userId, embedding, {
-      subject: item.subject,
-      senderName: item.senderName,
-      senderEmail: item.senderEmail,
-      snippet: item.snippet,
-      summary: item.summary,
-      createdAt: (item as any).createdAt,
-    });
+    const upsertOk = await this.qdrant.upsertEmbedding(
+      messageId,
+      userId,
+      embedding,
+      {
+        subject: item.subject,
+        senderName: item.senderName,
+        senderEmail: item.senderEmail,
+        snippet: item.snippet,
+        summary: item.summary,
+        createdAt: (item as any).createdAt,
+      },
+    );
+
+    // Important: only mark Mongo as embedded if Qdrant upsert succeeded.
+    if (!upsertOk) {
+      throw new InternalServerErrorException(
+        'Failed to store embedding in vector database',
+      );
+    }
 
     // Update MongoDB
     item.hasEmbedding = true;
@@ -386,9 +399,9 @@ export class KanbanService {
   ) {
     // Optional sync khi mở board lần đầu
     if (labelId) {
-      await this.syncLabelToItems(userId, labelId, 10);
+      await this.syncLabelToItems(userId, labelId, 5);
     } else {
-      await this.syncLabelToItems(userId, 'INBOX', 10);
+      await this.syncLabelToItems(userId, 'INBOX', 5);
     }
 
     const uid = new Types.ObjectId(userId);

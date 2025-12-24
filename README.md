@@ -69,7 +69,7 @@ GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=GOCSPX-...
 
 OPENAI_API_KEY=sk-proj-....
-OPENAI_MODEL_SUMMARY=gpt-oss-120b
+OPENAI_MODEL_SUMMARY=
 ```
 
 ### 3. Run Development Server

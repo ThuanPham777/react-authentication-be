@@ -22,17 +22,7 @@ export class UserSettings extends Document {
         order: Number,
       },
     ],
-    default: [
-      { id: 'INBOX', name: 'Inbox', gmailLabel: 'INBOX', order: 0 },
-      { id: 'TODO', name: 'To Do', gmailLabel: 'TODO', order: 1 },
-      {
-        id: 'IN_PROGRESS',
-        name: 'In Progress',
-        gmailLabel: 'IN_PROGRESS',
-        order: 2,
-      },
-      { id: 'DONE', name: 'Done', gmailLabel: 'DONE', order: 3 },
-    ],
+    default: [{ id: 'INBOX', name: 'Inbox', gmailLabel: 'INBOX', order: 0 }],
   })
   kanbanColumns: KanbanColumnConfig[];
 }

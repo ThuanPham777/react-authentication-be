@@ -66,6 +66,8 @@ export const UserSchema = SchemaFactory.createForClass(User);
 UserSchema.set('toJSON', {
   transform: (_doc: any, ret: any) => {
     delete ret.password;
+    // never expose app refresh token to client
+    delete ret.refreshToken;
     if (ret.gmail?.refreshToken) {
       // không nên trả token ra client
       delete ret.gmail.refreshToken;

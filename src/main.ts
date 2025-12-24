@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
@@ -24,6 +24,6 @@ async function bootstrap() {
 
   const port = config.get<number>('PORT') || 4000;
   await app.listen(port);
-  console.log(`API running on http://localhost:${port}`);
+  Logger.log(`API running on http://localhost:${port}`, 'Bootstrap');
 }
 bootstrap();

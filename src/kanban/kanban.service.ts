@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -21,6 +22,8 @@ import Fuse from 'fuse.js';
 
 @Injectable()
 export class KanbanService {
+  private readonly logger = new Logger(KanbanService.name);
+
   constructor(
     @InjectModel(EmailItem.name)
     private emailItemModel: Model<EmailItemDocument>,
@@ -242,7 +245,7 @@ export class KanbanService {
           messageId: { $in: messageIds },
         })
         .select(
-          'messageId subject senderName senderEmail snippet summary status hasAttachments',
+          '_id userId provider mailboxId messageId threadId subject senderName senderEmail snippet summary status originalStatus snoozeUntil lastSummarizedAt hasAttachments createdAt updatedAt',
         )
         .lean()
         .exec();
@@ -420,14 +423,43 @@ export class KanbanService {
   }
 
   private parseAddress(raw: string) {
-    const match = raw.match(/(.*)<(.+@.+)>/);
-    if (match) {
+    if (!raw || !raw.trim()) {
+      return { name: 'Unknown', email: '' };
+    }
+
+    const trimmed = raw.trim();
+
+    // Format: "Name" <email@example.com>
+    const matchWithQuotes = trimmed.match(/"([^"]+)"\s*<(.+@.+)>/);
+    if (matchWithQuotes) {
       return {
-        name: match[1].trim().replace(/^"|"$/g, ''),
-        email: match[2].trim(),
+        name: matchWithQuotes[1].trim(),
+        email: matchWithQuotes[2].trim(),
       };
     }
-    return { name: raw || 'Unknown', email: raw };
+
+    // Format: Name <email@example.com>
+    const matchWithoutQuotes = trimmed.match(/(.+?)\s*<(.+@.+)>/);
+    if (matchWithoutQuotes) {
+      return {
+        name: matchWithoutQuotes[1].trim(),
+        email: matchWithoutQuotes[2].trim(),
+      };
+    }
+
+    // Format: email@example.com (no name)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (emailRegex.test(trimmed)) {
+      // Extract name from email (part before @)
+      const username = trimmed.split('@')[0];
+      return {
+        name: username.replace(/[._-]/g, ' ').trim() || 'Unknown',
+        email: trimmed,
+      };
+    }
+
+    // Fallback: treat entire string as name
+    return { name: trimmed, email: trimmed };
   }
 
   /**
@@ -476,7 +508,15 @@ export class KanbanService {
       const headers = detail.data.payload?.headers ?? [];
       const fromRaw = this.getHeader(headers, 'From');
       const subject = this.getHeader(headers, 'Subject') || '(No subject)';
+      const snippet = detail.data.snippet || subject; // Use Gmail snippet
       const from = this.parseAddress(fromRaw);
+
+      // Debug logging
+      if (!fromRaw || from.name === 'Unknown') {
+        this.logger.warn(
+          `Email ${m.id}: Missing or invalid From header. fromRaw="${fromRaw}", parsed name="${from.name}"`,
+        );
+      }
 
       // Detect attachments if requested (walk payload)
       let hasAttachments = false;
@@ -510,7 +550,7 @@ export class KanbanService {
             senderName: from.name,
             senderEmail: from.email,
             subject,
-            snippet: subject,
+            snippet,
             threadId: detail.data.threadId,
             hasAttachments,
           },
@@ -604,15 +644,34 @@ export class KanbanService {
           ? resolveLabelId(col.gmailLabel)
           : '';
 
-        // Skip columns without valid Gmail labels (e.g., Archive with empty label)
+        // For columns without Gmail labels, fetch from MongoDB by status
         if (!gmailLabelId) {
-          console.log(
-            `[Kanban getBoard] Column "${col.name}" has no Gmail label. Showing no cards.`,
+          this.logger.log(
+            `Column "${col.name}" has no Gmail label. Fetching from MongoDB by status.`,
           );
+
+          // Count total items with this status
+          const total = await this.emailItemModel.countDocuments({
+            userId: uid,
+            status: col.id,
+          });
+
+          // Fetch paginated items from MongoDB
+          const skip = skipMap[col.id] || 0;
+          const items = await this.emailItemModel
+            .find({ userId: uid, status: col.id })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(pageSize)
+            .lean();
+
           return {
             status: col.id,
-            items: [],
-            total: 0,
+            items: items.map((item) => ({
+              ...item,
+              hasAttachments: item.hasAttachments ?? false,
+            })),
+            total,
             warning: col.gmailLabel
               ? `Gmail label "${col.gmailLabel}" not found. Please update column settings.`
               : undefined,
@@ -833,9 +892,9 @@ export class KanbanService {
           : addLabelId
             ? `applied label (${gmailLabel} -> ${addLabelId})`
             : 'removed workflow labels';
-        console.log(`[Gmail Sync] ${action} for message ${messageId}`);
+        this.logger.log(`${action} for message ${messageId}`);
       } catch (error) {
-        console.error(`[Gmail Sync] Failed to sync labels:`, error);
+        this.logger.error(`Failed to sync labels:`, error);
         // Don't fail the whole operation if Gmail sync fails
       }
     }

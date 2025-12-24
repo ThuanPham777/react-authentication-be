@@ -8,144 +8,138 @@ import {
   UseGuards,
   Res,
   BadRequestException,
-  Req,
 } from '@nestjs/common';
-import type { Response, Request } from 'express';
+import type { Response } from 'express';
 import { MailService } from './mail.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { CurrentUserData } from '../common/decorators/current-user.decorator';
+import { SendEmailDto, ReplyEmailDto, ModifyEmailDto } from './dtos/request';
+import {
+  MailboxesResponseDto,
+  EmailListResponseDto,
+  EmailDetailResponseDto,
+  SendEmailResponseDto,
+} from './dtos/response';
+import { ApiResponseDto } from '../common/dtos/api-response.dto';
 
 @Controller('api')
 @UseGuards(JwtAuthGuard)
 export class MailController {
   constructor(private readonly mail: MailService) {}
 
-  private getUserId(req: Request) {
-    const u: any = (req as any).user;
-    const id = u?.sub ?? u?.userId ?? u?.id ?? u?._id;
-    if (!id) {
-      throw new BadRequestException('Missing user in request');
-    }
-    return id;
-  }
-
   @Get('mailboxes')
-  async getMailboxes(@Req() req: Request): Promise<any> {
-    const userId = this.getUserId(req);
-    const mailboxes = await this.mail.getMailboxes(userId);
-    return { status: 'success', data: mailboxes };
+  async getMailboxes(
+    @CurrentUser() user: CurrentUserData,
+  ): Promise<ApiResponseDto<MailboxesResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const mailboxes = await this.mail.getMailboxes(user.userId);
+    const response = MailboxesResponseDto.create(mailboxes);
+    return ApiResponseDto.success(response);
   }
 
   @Get('mailboxes/:id/emails')
   async getMailboxEmails(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('id') mailboxId: string,
     @Query('page') page?: string,
     @Query('limit') limit = '20',
     @Query('pageSize') pageSize?: string,
     @Query('pageToken') pageToken?: string,
-  ): Promise<any> {
-    const userId = this.getUserId(req);
+  ): Promise<ApiResponseDto<EmailListResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const limitNum = Number(limit) || Number(pageSize) || 20;
 
-    // Nếu có pageToken, dùng nó thay vì page number
+    // If pageToken exists, use token-based pagination
     if (pageToken) {
       const result = await this.mail.getEmailsByMailboxWithToken(
-        userId,
+        user.userId,
         mailboxId,
         pageToken,
         limitNum,
       );
-      return { status: 'success', ...result };
+      const response = EmailListResponseDto.create(result);
+      return ApiResponseDto.success(response);
     }
 
     // Fallback: page-based (for backward compatibility)
     const pageNum = Number(page) || 1;
     const result = await this.mail.getEmailsByMailbox(
-      userId,
+      user.userId,
       mailboxId,
       pageNum,
       limitNum,
     );
-    return { status: 'success', ...result };
+    const response = EmailListResponseDto.create(result);
+    return ApiResponseDto.success(response);
   }
 
   @Get('emails/:id')
   async getEmailDetail(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('id') emailId: string,
-  ): Promise<any> {
-    const userId = this.getUserId(req);
-    const email = await this.mail.getEmailById(userId, emailId);
-    return { status: 'success', data: email };
+  ): Promise<ApiResponseDto<EmailDetailResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const email = await this.mail.getEmailById(user.userId, emailId);
+    const response = EmailDetailResponseDto.fromEmailDetail(email);
+    return ApiResponseDto.success(response);
   }
 
   @Post('emails/send')
   async sendEmail(
-    @Req() req: Request,
-    @Body()
-    body: {
-      to: string[];
-      subject: string;
-      body: string;
-      cc?: string[];
-      bcc?: string[];
-    },
-  ) {
-    const userId = this.getUserId(req);
-    const messageId = await this.mail.sendEmail(userId, body);
-    return { status: 'success', message: 'Email sent successfully', messageId };
+    @CurrentUser() user: CurrentUserData,
+    @Body() dto: SendEmailDto,
+  ): Promise<ApiResponseDto<SendEmailResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const messageId = await this.mail.sendEmail(user.userId, dto);
+    const response = SendEmailResponseDto.create(messageId);
+    return ApiResponseDto.success(response, 'Email sent successfully');
   }
 
   @Post('emails/:id/reply')
   async replyEmail(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('id') emailId: string,
-    @Body() body: { body: string; replyAll?: boolean },
-  ) {
-    if (!body.body?.trim())
+    @Body() dto: ReplyEmailDto,
+  ): Promise<ApiResponseDto<SendEmailResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    if (!dto.body?.trim())
       throw new BadRequestException('Reply body is required');
-    const userId = this.getUserId(req);
 
     const messageId = await this.mail.replyToEmail(
-      userId,
+      user.userId,
       emailId,
-      body.body,
-      body.replyAll,
+      dto.body,
+      dto.replyAll,
     );
-    return { status: 'success', message: 'Reply sent successfully', messageId };
+    const response = SendEmailResponseDto.create(messageId);
+    return ApiResponseDto.success(response, 'Reply sent successfully');
   }
 
   @Post('emails/:id/modify')
   async modifyEmail(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('id') emailId: string,
-    @Body()
-    body: {
-      markRead?: boolean;
-      markUnread?: boolean;
-      star?: boolean;
-      unstar?: boolean;
-      delete?: boolean;
-    },
-  ) {
-    const userId = this.getUserId(req);
-    await this.mail.modifyEmail(userId, emailId, body);
-    return { status: 'success', message: 'Email modified successfully' };
+    @Body() dto: ModifyEmailDto,
+  ): Promise<ApiResponseDto<null>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    await this.mail.modifyEmail(user.userId, emailId, dto);
+    return ApiResponseDto.success(null, 'Email modified successfully');
   }
 
   @Get('attachments/:id')
   async getAttachment(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('id') attachmentId: string,
     @Query('emailId') emailId: string,
     @Res() res: Response,
   ) {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     if (!emailId)
       throw new BadRequestException('emailId query parameter is required');
-    const userId = this.getUserId(req);
 
     const attachment = await this.mail.getAttachment(
-      userId,
+      user.userId,
       emailId,
       attachmentId,
     );

@@ -7,7 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { google } from 'googleapis';
 import { UsersService } from '../users/users.service';
 
-interface EmailListItem {
+export interface EmailListItem {
   id: string; // format: labelId|messageId
   mailboxId: string; // labelId
   senderName: string;
@@ -20,7 +20,7 @@ interface EmailListItem {
   important: boolean;
 }
 
-interface EmailDetail extends EmailListItem {
+export interface EmailDetail extends EmailListItem {
   to: string[];
   cc?: string[];
   body: string;

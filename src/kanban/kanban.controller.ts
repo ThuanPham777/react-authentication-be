@@ -6,157 +6,197 @@ import {
   Post,
   Param,
   Query,
-  Req,
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
-import type { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { KanbanService } from './kanban.service';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { CurrentUserData } from '../common/decorators/current-user.decorator';
+import {
+  UpdateStatusDto,
+  SnoozeDto,
+  ValidateLabelDto,
+  SemanticSearchDto,
+  UpdateColumnsDto,
+} from './dtos/request';
+import {
+  KanbanBoardResponseDto,
+  GmailLabelsResponseDto,
+  ValidateLabelResponseDto,
+  SearchResponseDto,
+  SearchSuggestionsResponseDto,
+  KanbanColumnsResponseDto,
+  KanbanItemResponseDto,
+} from './dtos/response';
+import { ApiResponseDto } from '../common/dtos/api-response.dto';
 
 @Controller('api/kanban')
 @UseGuards(JwtAuthGuard)
 export class KanbanController {
   constructor(private readonly kanban: KanbanService) {}
 
-  private getUserId(req: Request) {
-    const u: any = (req as any).user;
-    const id = u?.sub ?? u?.userId ?? u?.id ?? u?._id;
-    if (!id) throw new BadRequestException('Missing user in request');
-    return id;
-  }
-
   @Get('board')
   async getBoard(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Query('label') label?: string,
     @Query('pageToken') pageToken?: string,
     @Query('limit') limit?: string,
-  ) {
-    const userId = this.getUserId(req);
+  ): Promise<ApiResponseDto<KanbanBoardResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const pageSize = limit ? parseInt(limit, 10) : 20;
     const result = await this.kanban.getBoard(
-      userId,
+      user.userId,
       label,
       pageToken,
       pageSize,
     );
-    return { status: 'success', ...result };
+    const response = KanbanBoardResponseDto.create(result);
+    return ApiResponseDto.success(response);
   }
 
   @Get('gmail-labels')
-  async getGmailLabels(@Req() req: Request) {
-    const userId = this.getUserId(req);
-    const labels = await this.kanban.getAvailableGmailLabels(userId);
-    return { status: 'success', labels };
+  async getGmailLabels(
+    @CurrentUser() user: CurrentUserData,
+  ): Promise<ApiResponseDto<GmailLabelsResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const labels = await this.kanban.getAvailableGmailLabels(user.userId);
+    const response = GmailLabelsResponseDto.create(labels);
+    return ApiResponseDto.success(response);
   }
 
   @Post('validate-label')
   async validateLabel(
-    @Req() req: Request,
-    @Body() body: { labelName: string },
-  ) {
-    const userId = this.getUserId(req);
-    const result = await this.kanban.validateGmailLabel(userId, body.labelName);
-    return { status: 'success', ...result };
+    @CurrentUser() user: CurrentUserData,
+    @Body() dto: ValidateLabelDto,
+  ): Promise<ApiResponseDto<ValidateLabelResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const result = await this.kanban.validateGmailLabel(
+      user.userId,
+      dto.labelName,
+    );
+    const response = ValidateLabelResponseDto.create(result);
+    return ApiResponseDto.success(response);
   }
 
   @Get('search')
   async search(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Query('q') q?: string,
     @Query('limit') limit?: string,
-  ) {
-    const userId = this.getUserId(req);
+  ): Promise<ApiResponseDto<SearchResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const l = limit ? parseInt(limit, 10) : 50;
-    const data = await this.kanban.searchItems(userId, q ?? '', l);
-    return { status: 'success', data };
+    const data = await this.kanban.searchItems(user.userId, q ?? '', l);
+    const response = SearchResponseDto.create(data);
+    return ApiResponseDto.success(response);
   }
 
   @Post('search/semantic')
   async semanticSearch(
-    @Req() req: Request,
-    @Body() body: { query: string; limit?: number },
-  ) {
-    const userId = this.getUserId(req);
+    @CurrentUser() user: CurrentUserData,
+    @Body() dto: SemanticSearchDto,
+  ): Promise<ApiResponseDto<SearchResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const data = await this.kanban.semanticSearch(
-      userId,
-      body.query,
-      body.limit ?? 20,
+      user.userId,
+      dto.query,
+      dto.limit ?? 20,
     );
-    return { status: 'success', data };
+    const response = SearchResponseDto.create(data);
+    return ApiResponseDto.success(response);
   }
 
   @Get('search/suggestions')
   async searchSuggestions(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Query('q') q?: string,
     @Query('limit') limit?: string,
-  ) {
-    const userId = this.getUserId(req);
+  ): Promise<ApiResponseDto<SearchSuggestionsResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const l = limit ? parseInt(limit, 10) : 5;
-    const data = await this.kanban.getSearchSuggestions(userId, q ?? '', l);
-    return { status: 'success', data };
+    const data = await this.kanban.getSearchSuggestions(
+      user.userId,
+      q ?? '',
+      l,
+    );
+    const response = SearchSuggestionsResponseDto.create(data);
+    return ApiResponseDto.success(response);
   }
 
   @Post('items/:messageId/generate-embedding')
   async generateEmbedding(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('messageId') messageId: string,
-  ) {
-    const userId = this.getUserId(req);
+  ): Promise<ApiResponseDto<any>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const result = await this.kanban.generateAndStoreEmbedding(
-      userId,
+      user.userId,
       messageId,
     );
-    return { status: 'success', data: result };
+    return ApiResponseDto.success(result);
   }
 
   @Patch('items/:messageId/status')
   async updateStatus(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('messageId') messageId: string,
-    @Body() body: { status: string; gmailLabel?: string },
-  ) {
-    const userId = this.getUserId(req);
+    @Body() dto: UpdateStatusDto,
+  ): Promise<ApiResponseDto<KanbanItemResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
     const updated = await this.kanban.updateStatus(
-      userId,
+      user.userId,
       messageId,
-      body.status,
-      body.gmailLabel,
+      dto.status,
+      dto.gmailLabel,
     );
-    return { status: 'success', data: updated };
+    const response = KanbanItemResponseDto.fromEmailItem(updated);
+    return ApiResponseDto.success(response);
   }
 
   @Post('items/:messageId/snooze')
   async snooze(
-    @Req() req: Request,
+    @CurrentUser() user: CurrentUserData,
     @Param('messageId') messageId: string,
-    @Body() body: { until: string },
-  ) {
-    const userId = this.getUserId(req);
-    const updated = await this.kanban.snooze(userId, messageId, body.until);
-    return { status: 'success', data: updated };
+    @Body() dto: SnoozeDto,
+  ): Promise<ApiResponseDto<KanbanItemResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const updated = await this.kanban.snooze(user.userId, messageId, dto.until);
+    const response = KanbanItemResponseDto.fromEmailItem(updated);
+    return ApiResponseDto.success(response);
   }
 
   @Post('items/:messageId/summarize')
-  async summarize(@Req() req: Request, @Param('messageId') messageId: string) {
-    const userId = this.getUserId(req);
-    const result = await this.kanban.summarize(userId, messageId);
-    return { status: 'success', data: result };
+  async summarize(
+    @CurrentUser() user: CurrentUserData,
+    @Param('messageId') messageId: string,
+  ): Promise<ApiResponseDto<any>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const result = await this.kanban.summarize(user.userId, messageId);
+    return ApiResponseDto.success(result);
   }
 
   @Get('columns')
-  async getColumns(@Req() req: Request) {
-    const userId = this.getUserId(req);
-    const columns = await this.kanban.getKanbanColumns(userId);
-    return { status: 'success', data: columns };
+  async getColumns(
+    @CurrentUser() user: CurrentUserData,
+  ): Promise<ApiResponseDto<KanbanColumnsResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const columns = await this.kanban.getKanbanColumns(user.userId);
+    const response = KanbanColumnsResponseDto.create(columns);
+    return ApiResponseDto.success(response);
   }
 
   @Post('columns')
-  async updateColumns(@Req() req: Request, @Body() body: { columns: any[] }) {
-    const userId = this.getUserId(req);
-    const columns = await this.kanban.updateKanbanColumns(userId, body.columns);
-    return { status: 'success', data: columns };
+  async updateColumns(
+    @CurrentUser() user: CurrentUserData,
+    @Body() dto: UpdateColumnsDto,
+  ): Promise<ApiResponseDto<KanbanColumnsResponseDto>> {
+    if (!user?.userId) throw new BadRequestException('User not authenticated');
+    const columns = await this.kanban.updateKanbanColumns(
+      user.userId,
+      dto.columns,
+    );
+    const response = KanbanColumnsResponseDto.create(columns);
+    return ApiResponseDto.success(response);
   }
 }

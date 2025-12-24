@@ -81,7 +81,6 @@ npm run start:dev
 The backend will start on `http://localhost:4000`
 
 > **Heads-up:** `GOOGLE_CLIENT_ID` must match the client ID configured in Google Identity Services (used for app login).
-> The IMAP/SMTP credentials should point to a test mailbox that the backend can log into (e.g., a Gmail account with IMAP enabled and an App Password).
 
 ### Useful Commands
 
@@ -113,7 +112,9 @@ The backend will start on `http://localhost:4000`
 | `GET`  | `/api/emails/:id`           | Email detail, metadata, attachments (JWT)  |
 | `POST` | `/api/emails/send`          | Send email (JWT)                           |
 | `POST` | `/api/emails/:id/reply`     | Reply to an email (JWT)                    |
+| `POST` | `/api/emails/:id/forward`   | Forward an email (JWT)                     |
 | `POST` | `/api/emails/:id/modify`    | Modify email (mark read/unread, star, etc) |
+| `GET`  | `/api/attachments/:id`      | Download attachment (JWT)                  |
 
 ### Kanban Board Endpoints
 

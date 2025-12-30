@@ -106,28 +106,170 @@ export class MailService {
     return Buffer.from(base64, 'base64').toString('utf8');
   }
 
-  private extractBody(payload: any): string {
+  private base64UrlToBase64(input: string) {
+    const pad = '='.repeat((4 - (input.length % 4)) % 4);
+    return (input + pad).replace(/-/g, '+').replace(/_/g, '/');
+  }
+
+  private escapeHtml(text: string) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private findFirstPartByMime(payload: any, mimeType: string): any | null {
+    if (!payload) return null;
+    if ((payload.mimeType || '').toLowerCase() === mimeType.toLowerCase()) {
+      return payload;
+    }
+    if (payload.parts?.length) {
+      for (const p of payload.parts) {
+        const found = this.findFirstPartByMime(p, mimeType);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  private async getPartDataBase64Url(
+    gmail: any,
+    messageId: string,
+    part: any,
+  ): Promise<string | undefined> {
+    if (!part) return undefined;
+    const direct = part.body?.data;
+    if (direct) return direct;
+
+    const attachmentId = part.body?.attachmentId;
+    if (!attachmentId) return undefined;
+
+    const attachment = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+
+    return attachment?.data?.data ?? undefined;
+  }
+
+  private async extractBodyHtml(
+    gmail: any,
+    messageId: string,
+    payload: any,
+  ): Promise<string> {
     if (!payload) return '<p>No content</p>';
 
-    // ưu tiên text/html
-    if (payload.mimeType === 'text/html' && payload.body?.data) {
-      return this.base64UrlDecode(payload.body.data);
-    }
-    if (payload.mimeType === 'text/plain' && payload.body?.data) {
-      const text = this.base64UrlDecode(payload.body.data);
-      return `<pre>${text}</pre>`;
+    const htmlPart = this.findFirstPartByMime(payload, 'text/html');
+    if (htmlPart) {
+      const data = await this.getPartDataBase64Url(gmail, messageId, htmlPart);
+      if (data) return this.base64UrlDecode(data);
     }
 
-    // duyệt parts
-    if (payload.parts?.length) {
-      // tìm html
-      for (const p of payload.parts) {
-        const html = this.extractBody(p);
-        if (html && !html.includes('No content')) return html;
+    const textPart = this.findFirstPartByMime(payload, 'text/plain');
+    if (textPart) {
+      const data = await this.getPartDataBase64Url(gmail, messageId, textPart);
+      if (data) {
+        const text = this.base64UrlDecode(data);
+        return `<pre style="white-space:pre-wrap">${this.escapeHtml(text)}</pre>`;
       }
     }
 
     return '<p>No content</p>';
+  }
+
+  /**
+   * Extract inline images (images with Content-ID for cid: references)
+   */
+  private async extractInlineImages(
+    gmail: any,
+    messageId: string,
+    payload: any,
+  ): Promise<Map<string, { data: string; mimeType: string }>> {
+    const inlineImages = new Map<string, { data: string; mimeType: string }>();
+
+    const walk = async (node: any) => {
+      if (!node) return;
+
+      const headers = node.headers || [];
+      const contentIdHeader = headers.find(
+        (h: any) => h.name?.toLowerCase() === 'content-id',
+      );
+      const contentLocationHeader = headers.find(
+        (h: any) => h.name?.toLowerCase() === 'content-location',
+      );
+      const dispositionHeader = headers.find(
+        (h: any) => h.name?.toLowerCase() === 'content-disposition',
+      );
+
+      const isInline = dispositionHeader?.value
+        ?.toLowerCase()
+        ?.includes('inline');
+      const isImage = (node.mimeType || '').toLowerCase().startsWith('image/');
+
+      if (isImage && (contentIdHeader || contentLocationHeader || isInline)) {
+        const data = await this.getPartDataBase64Url(gmail, messageId, node);
+        if (data) {
+          const keys: string[] = [];
+          if (contentIdHeader?.value) {
+            keys.push(contentIdHeader.value.replace(/^<|>$/g, '').trim());
+          }
+          if (contentLocationHeader?.value) {
+            keys.push(contentLocationHeader.value.trim());
+          }
+          if (node.filename) {
+            keys.push(node.filename);
+          }
+
+          for (const key of keys) {
+            if (!key) continue;
+            inlineImages.set(key, {
+              data,
+              mimeType: node.mimeType || 'image/jpeg',
+            });
+          }
+        }
+      }
+
+      if (node.parts?.length) {
+        for (const p of node.parts) {
+          await walk(p);
+        }
+      }
+    };
+
+    await walk(payload);
+    return inlineImages;
+  }
+
+  /**
+   * Replace cid: references in HTML with base64 data URIs
+   */
+  private replaceInlineImages(
+    html: string,
+    inlineImages: Map<string, { data: string; mimeType: string }>,
+  ): string {
+    let result = html;
+
+    // Replace all cid: references
+    inlineImages.forEach((imageData, contentId) => {
+      const base64 = this.base64UrlToBase64(imageData.data);
+      const dataUri = `data:${imageData.mimeType};base64,${base64}`;
+
+      const escaped = contentId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Replace cid: references (with/without angle brackets)
+      const cidPattern = new RegExp(`cid:(?:<)?${escaped}(?:>)?`, 'gi');
+      result = result.replace(cidPattern, dataUri);
+
+      // Some HTML uses the Content-Location directly
+      const srcPattern = new RegExp(`src=["']${escaped}["']`, 'gi');
+      result = result.replace(srcPattern, `src="${dataUri}"`);
+    });
+
+    return result;
   }
 
   private extractAttachments(payload: any) {
@@ -143,8 +285,17 @@ export class MailService {
 
       const filename = node.filename;
       const body = node.body;
+      const headers = node.headers || [];
 
-      if (filename && body?.attachmentId) {
+      // Check Content-Disposition to filter out inline images
+      const dispositionHeader = headers.find(
+        (h: any) => h.name?.toLowerCase() === 'content-disposition',
+      );
+      const isInline = dispositionHeader?.value?.includes('inline');
+
+      // Only include as attachment if it has attachmentId and is NOT inline
+      // (inline images should be embedded in the body, not listed as attachments)
+      if (filename && body?.attachmentId && !isInline) {
         result.push({
           id: body.attachmentId,
           fileName: filename,
@@ -385,7 +536,20 @@ export class MailService {
     const from = this.parseAddress(fromRaw);
     const labelIds = msg.data.labelIds ?? [];
 
-    const body = this.extractBody(msg.data.payload);
+    // Extract body HTML (prefer text/html, fallback to text/plain)
+    let body = await this.extractBodyHtml(gmail, messageId, msg.data.payload);
+
+    // Extract inline images (cid/content-location/inline)
+    const inlineImages = await this.extractInlineImages(
+      gmail,
+      messageId,
+      msg.data.payload,
+    );
+
+    if (inlineImages.size > 0) {
+      body = this.replaceInlineImages(body, inlineImages);
+    }
+
     const attachments = this.extractAttachments(msg.data.payload);
 
     const to = toRaw

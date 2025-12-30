@@ -61,8 +61,9 @@ export class AiService {
         {
           role: 'system',
           content:
-            'Summarize this email for a Kanban productivity app. ' +
-            'Return 2-4 concise bullet points and one action suggestion line.',
+            'You are an expert email summarizer. Create a concise, professional summary of the email content. ' +
+            'Focus on the main points, key information, and context. ' +
+            'Use 2-4 bullet points for clarity. Keep it brief and informative.',
         },
         {
           role: 'user',

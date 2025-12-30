@@ -206,22 +206,35 @@ export class QdrantService implements OnModuleInit {
       await this.clientReady;
       if (!this.client) return [];
 
-      const results = await this.client.scroll(this.collectionName, {
-        filter: {
-          must: [
-            {
-              key: 'userId',
-              match: { value: userId },
-            },
-          ],
-        },
-        limit,
-        with_payload: true,
-      });
+      // Use scroll to get all points for the user (in batches if needed)
+      const allPoints = [];
+      let offset = null;
+
+      do {
+        const results = await this.client.scroll(this.collectionName, {
+          filter: {
+            must: [
+              {
+                key: 'userId',
+                match: { value: userId },
+              },
+            ],
+          },
+          limit: Math.min(limit * 3, 500), // Get more points to ensure unique contacts
+          offset,
+          with_payload: true,
+        });
+
+        allPoints.push(...results.points);
+        offset = results.next_page_offset;
+
+        // Break if we have enough unique contacts or no more results
+        if (!offset || allPoints.length >= limit * 3) break;
+      } while (offset);
 
       const contacts = new Map<string, { name: string; email: string }>();
 
-      results.points.forEach((point) => {
+      allPoints.forEach((point) => {
         const email = point.payload?.senderEmail as string;
         const name = point.payload?.senderName as string;
         if (email && !contacts.has(email)) {
@@ -229,7 +242,7 @@ export class QdrantService implements OnModuleInit {
         }
       });
 
-      return Array.from(contacts.values());
+      return Array.from(contacts.values()).slice(0, limit);
     } catch (error) {
       this.logger.error('Failed to get unique contacts', error);
       return [];

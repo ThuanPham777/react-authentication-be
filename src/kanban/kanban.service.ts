@@ -229,13 +229,33 @@ export class KanbanService {
       // Generate embedding for search query
       const queryEmbedding = await this.ai.generateEmbedding(query.trim());
 
-      // Search in Qdrant
+      // Search in Qdrant with better threshold
+      // Cosine similarity: 1.0 = identical, 0.0 = completely different
+      // 0.5 = moderately similar, good balance for semantic search
       const results = await this.qdrant.searchSimilar(
         userId,
         queryEmbedding,
-        limit,
-        0.2, // Score threshold for relevance (0.5 is often too strict)
+        limit * 2, // Get more results to filter
+        0.5, // Better threshold for meaningful semantic matches
       );
+
+      if (results.length === 0) {
+        // If no results with 0.5, try with lower threshold
+        this.logger.log(
+          `No results with threshold 0.5, trying 0.3 for query: ${query}`,
+        );
+        const lowerResults = await this.qdrant.searchSimilar(
+          userId,
+          queryEmbedding,
+          limit * 2,
+          0.3,
+        );
+        if (lowerResults.length === 0) {
+          // Fallback to fuzzy search
+          return this.searchItems(userId, query, limit);
+        }
+        results.push(...lowerResults);
+      }
 
       // Enrich with MongoDB data (batch query for better performance)
       const messageIds = results.map((r) => r.messageId);
@@ -266,9 +286,13 @@ export class KanbanService {
         }
       }
 
-      return enriched;
+      // Sort by score descending (higher score = better match)
+      enriched.sort((a, b) => (b._score || 0) - (a._score || 0));
+
+      // Return top results
+      return enriched.slice(0, limit);
     } catch (error) {
-      console.error('Semantic search error:', error);
+      this.logger.error('Semantic search error:', error);
       // Fallback to fuzzy search if semantic search fails
       return this.searchItems(userId, query, limit);
     }
@@ -286,14 +310,21 @@ export class KanbanService {
     const q = query.trim().toLowerCase();
 
     // Get unique contacts from Qdrant
-    const contacts = await this.qdrant.getUniqueContacts(userId, 100);
+    const contacts = await this.qdrant.getUniqueContacts(userId, 200);
 
-    // Filter contacts by query
-    const contactSuggestions = contacts
-      .filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q),
-      )
+    // Filter contacts by query - prioritize startsWith, then includes
+    const exactMatches = contacts.filter(
+      (c) =>
+        c.name.toLowerCase().startsWith(q) ||
+        c.email.toLowerCase().startsWith(q),
+    );
+    const partialMatches = contacts.filter(
+      (c) =>
+        !exactMatches.includes(c) &&
+        (c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)),
+    );
+
+    const contactSuggestions = [...exactMatches, ...partialMatches]
       .slice(0, 3)
       .map((c) => ({
         type: 'contact' as const,
@@ -301,36 +332,57 @@ export class KanbanService {
         value: c.email,
       }));
 
-    // Get subject keywords from recent emails (limit fields to reduce memory)
+    // Get subject keywords from recent emails (increase limit)
     const recentEmails = await this.emailItemModel
       .find({ userId: uid })
       .sort({ createdAt: -1 })
-      .limit(50)
-      .select('subject')
+      .limit(200)
+      .select('subject snippet')
       .lean()
       .exec();
 
-    // Extract keywords from subjects
-    const keywords = new Set<string>();
+    // Extract keywords from subjects and snippets - better matching logic
+    const keywordCounts = new Map<string, number>();
     recentEmails.forEach((email) => {
-      if (email.subject) {
-        const words = email.subject
+      const text = `${email.subject || ''} ${(email as any).snippet || ''}`;
+      if (text) {
+        const words = text
           .toLowerCase()
-          .split(/\s+/)
-          .filter((w) => w.length > 3 && w.includes(q));
-        words.forEach((w) => keywords.add(w));
+          .split(/[\s,\.;:!?]+/)
+          .filter(
+            (w) =>
+              w.length > 3 &&
+              (w.startsWith(q) || (q.length >= 3 && w.includes(q))),
+          );
+        words.forEach((w) => {
+          keywordCounts.set(w, (keywordCounts.get(w) || 0) + 1);
+        });
       }
     });
 
-    const keywordSuggestions = Array.from(keywords)
-      .slice(0, 2)
+    // Sort keywords by frequency and relevance
+    const sortedKeywords = Array.from(keywordCounts.entries())
+      .sort((a, b) => {
+        // Prioritize words that start with query
+        const aStarts = a[0].startsWith(q) ? 1 : 0;
+        const bStarts = b[0].startsWith(q) ? 1 : 0;
+        if (aStarts !== bStarts) return bStarts - aStarts;
+        // Then by frequency
+        return b[1] - a[1];
+      })
+      .map(([word]) => word);
+
+    const keywordSuggestions = sortedKeywords
+      .slice(0, limit - contactSuggestions.length)
       .map((k) => ({
         type: 'keyword' as const,
         text: k,
         value: k,
       }));
 
-    return [...contactSuggestions, ...keywordSuggestions].slice(0, limit);
+    // Combine and ensure we have at least some suggestions
+    const combined = [...contactSuggestions, ...keywordSuggestions];
+    return combined.slice(0, limit);
   }
 
   /**
@@ -559,10 +611,9 @@ export class KanbanService {
       );
 
       // Generate embedding for new emails (in background, don't await)
-      // Skip embedding generation during initial sync to reduce memory
-      if (result.upsertedCount > 0 && process.env.NODE_ENV !== 'production') {
+      if (result.upsertedCount > 0) {
         this.generateAndStoreEmbedding(userId, m.id).catch((err) =>
-          console.error('Failed to generate embedding for', m.id, err),
+          this.logger.error('Failed to generate embedding for', m.id, err),
         );
       }
     }
@@ -570,12 +621,7 @@ export class KanbanService {
     return { synced: msgs.length };
   }
 
-  async getBoard(
-    userId: string,
-    labelId?: string,
-    pageToken?: string,
-    pageSize: number = 20,
-  ) {
+  async getBoard(userId: string, pageToken?: string, pageSize: number = 20) {
     const uid = new Types.ObjectId(userId);
     const gmail = await this.getGmailClient(userId);
     const now = new Date();
@@ -684,15 +730,15 @@ export class KanbanService {
           const response = await gmail.users.messages.list({
             userId: 'me',
             labelIds: [gmailLabelId],
-            // Fetch a bit extra to compensate for filtered-out snoozed items
-            maxResults: Math.min(500, (skipMap[col.id] || 0) + pageSize * 3),
+            // Limit to avoid excessive API calls and token consumption
+            maxResults: Math.min(100, (skipMap[col.id] || 0) + pageSize * 2),
           });
 
           const messages = response.data.messages || [];
 
           // Apply pagination (skip already fetched items)
           const skip = skipMap[col.id] || 0;
-          const paginatedMessages = messages.slice(skip, skip + pageSize * 3);
+          const paginatedMessages = messages.slice(skip, skip + pageSize * 2);
 
           // Fetch email details from MongoDB (or sync if missing)
           const items = await Promise.all(

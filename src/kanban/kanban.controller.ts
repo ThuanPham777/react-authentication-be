@@ -39,18 +39,12 @@ export class KanbanController {
   @Get('board')
   async getBoard(
     @CurrentUser() user: CurrentUserData,
-    @Query('label') label?: string,
     @Query('pageToken') pageToken?: string,
     @Query('limit') limit?: string,
   ): Promise<ApiResponseDto<KanbanBoardResponseDto>> {
     if (!user?.userId) throw new BadRequestException('User not authenticated');
     const pageSize = limit ? parseInt(limit, 10) : 20;
-    const result = await this.kanban.getBoard(
-      user.userId,
-      label,
-      pageToken,
-      pageSize,
-    );
+    const result = await this.kanban.getBoard(user.userId, pageToken, pageSize);
     const response = KanbanBoardResponseDto.create(result);
     return ApiResponseDto.success(response);
   }
